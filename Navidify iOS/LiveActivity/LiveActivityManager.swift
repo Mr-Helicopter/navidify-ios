@@ -8,29 +8,50 @@ public final class LiveActivityManager {
     public static let shared = LiveActivityManager()
 
     private var currentActivity: Activity<NavidifyActivityAttributes>?
+    private var lastProgressUpdateTime: Date = .distantPast
 
     private init() {
-        bindAudioEngine()
+        bindAudioEngineNotifications()
     }
 
-    private func bindAudioEngine() {
-        let engine = AudioEngine.shared
+    private func bindAudioEngineNotifications() {
+        NotificationCenter.default.addObserver(
+            forName: .audioEngineTrackDidChange,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            let song = notification.userInfo?["song"] as? Song
+            if let song = song {
+                self?.startOrUpdateActivity(song: song)
+            } else {
+                self?.endActivity()
+            }
+        }
 
-        engine.onTrackChange = { [weak self] song in
-            Task { @MainActor [weak self] in
-                guard let self = self else { return }
-                if let song = song {
-                    self.startOrUpdateActivity(song: song)
-                } else {
+        NotificationCenter.default.addObserver(
+            forName: .audioEnginePlaybackStateDidChange,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            guard let self = self else { return }
+            if let state = notification.userInfo?["playbackState"] as? PlaybackState {
+                if case .stopped = state {
                     self.endActivity()
+                } else {
+                    self.updatePlaybackState(state: state)
                 }
             }
         }
 
-        engine.onStateChange = { [weak self] state in
-            Task { @MainActor [weak self] in
-                self?.updatePlaybackState(state: state)
-            }
+        NotificationCenter.default.addObserver(
+            forName: .audioEngineProgressDidUpdate,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            guard let self = self,
+                  let currentTime = notification.userInfo?["currentTime"] as? Double,
+                  let duration = notification.userInfo?["duration"] as? Double else { return }
+            self.throttledProgressUpdate(currentTime: currentTime, duration: duration)
         }
     }
 
@@ -40,6 +61,7 @@ public final class LiveActivityManager {
         let contentState = NavidifyActivityAttributes.ContentState(
             title: song.title,
             artist: song.effectiveArtist,
+            album: song.effectiveAlbum,
             isPlaying: AudioEngine.shared.playbackState == .playing,
             currentTime: AudioEngine.shared.currentTime,
             duration: song.duration
@@ -70,9 +92,30 @@ public final class LiveActivityManager {
         let contentState = NavidifyActivityAttributes.ContentState(
             title: song.title,
             artist: song.effectiveArtist,
+            album: song.effectiveAlbum,
             isPlaying: state == .playing,
             currentTime: AudioEngine.shared.currentTime,
             duration: song.duration
+        )
+
+        Task {
+            await activity.update(ActivityContent(state: contentState, staleDate: nil))
+        }
+    }
+
+    private func throttledProgressUpdate(currentTime: Double, duration: Double) {
+        guard let activity = currentActivity, let song = AudioEngine.shared.currentSong else { return }
+        let now = Date()
+        guard now.timeIntervalSince(lastProgressUpdateTime) >= 2.0 else { return }
+        lastProgressUpdateTime = now
+
+        let contentState = NavidifyActivityAttributes.ContentState(
+            title: song.title,
+            artist: song.effectiveArtist,
+            album: song.effectiveAlbum,
+            isPlaying: AudioEngine.shared.playbackState == .playing,
+            currentTime: currentTime,
+            duration: duration
         )
 
         Task {

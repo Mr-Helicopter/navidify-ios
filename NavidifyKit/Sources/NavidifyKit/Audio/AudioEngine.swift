@@ -21,8 +21,30 @@ public final class AudioEngine: @unchecked Sendable {
     public static let shared = AudioEngine()
 
     // MARK: - Observable State
-    public private(set) var currentSong: Song?
-    public private(set) var playbackState: PlaybackState = .stopped
+    public private(set) var currentSong: Song? {
+        didSet {
+            onTrackChange?(currentSong)
+            var info: [String: Any] = [:]
+            if let song = currentSong {
+                info["song"] = song
+            }
+            NotificationCenter.default.post(
+                name: .audioEngineTrackDidChange,
+                object: self,
+                userInfo: info
+            )
+        }
+    }
+    public private(set) var playbackState: PlaybackState = .stopped {
+        didSet {
+            onStateChange?(playbackState)
+            NotificationCenter.default.post(
+                name: .audioEnginePlaybackStateDidChange,
+                object: self,
+                userInfo: ["playbackState": playbackState]
+            )
+        }
+    }
     public private(set) var currentTime: Double = 0.0
     public private(set) var duration: Double = 0.0
     public private(set) var isBuffering: Bool = false
@@ -102,6 +124,9 @@ public final class AudioEngine: @unchecked Sendable {
     private init() {
         setupAudioSession()
         setupAudioGraph()
+        #if os(iOS)
+        setupAudioSessionObservers()
+        #endif
     }
 
     private func setupAudioSession() {
@@ -115,6 +140,86 @@ public final class AudioEngine: @unchecked Sendable {
         }
         #endif
     }
+
+    #if os(iOS)
+    private var wasPlayingBeforeInterruption = false
+
+    private func setupAudioSessionObservers() {
+        NotificationCenter.default.addObserver(
+            forName: AVAudioSession.interruptionNotification,
+            object: AVAudioSession.sharedInstance(),
+            queue: .main
+        ) { [weak self] notification in
+            self?.handleAudioSessionInterruption(notification: notification)
+        }
+
+        NotificationCenter.default.addObserver(
+            forName: AVAudioSession.routeChangeNotification,
+            object: AVAudioSession.sharedInstance(),
+            queue: .main
+        ) { [weak self] notification in
+            self?.handleAudioSessionRouteChange(notification: notification)
+        }
+
+        NotificationCenter.default.addObserver(
+            forName: AVAudioSession.mediaServicesWereResetNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.handleMediaServicesReset()
+        }
+    }
+
+    private func handleAudioSessionInterruption(notification: Notification) {
+        guard let userInfo = notification.userInfo,
+              let typeValue = userInfo[AVAudioSessionInterruptionTypeKey] as? UInt,
+              let type = AVAudioSession.InterruptionType(rawValue: typeValue) else {
+            return
+        }
+
+        switch type {
+        case .began:
+            if case .playing = playbackState {
+                wasPlayingBeforeInterruption = true
+                pause()
+            } else {
+                wasPlayingBeforeInterruption = false
+            }
+        case .ended:
+            guard wasPlayingBeforeInterruption else { return }
+            wasPlayingBeforeInterruption = false
+            if let optionsValue = userInfo[AVAudioSessionInterruptionOptionKey] as? UInt {
+                let options = AVAudioSession.InterruptionOptions(rawValue: optionsValue)
+                if options.contains(.shouldResume) {
+                    resume()
+                }
+            }
+        @unknown default:
+            break
+        }
+    }
+
+    private func handleAudioSessionRouteChange(notification: Notification) {
+        guard let userInfo = notification.userInfo,
+              let reasonValue = userInfo[AVAudioSessionRouteChangeReasonKey] as? UInt,
+              let reason = AVAudioSession.RouteChangeReason(rawValue: reasonValue) else {
+            return
+        }
+
+        if reason == .oldDeviceUnavailable {
+            // Unplugged headphones / disconnected Bluetooth car audio: Apple HIG requires pausing
+            if case .playing = playbackState {
+                pause()
+            }
+        }
+    }
+
+    private func handleMediaServicesReset() {
+        print("[AudioEngine] Audio media services reset. Rebuilding graph...")
+        setupAudioSession()
+        setupAudioGraph()
+    }
+    #endif
 
     private func setupAudioGraph() {
         engine.attach(playerNodeA)
@@ -306,6 +411,11 @@ public final class AudioEngine: @unchecked Sendable {
                     self.scheduledFrames = targetFrame + AVAudioFramePosition(buffer.frameLength)
                     self.playbackState = .playing
                     self.onProgressUpdate?(self.currentTime, self.duration)
+                    NotificationCenter.default.post(
+                        name: .audioEngineProgressDidUpdate,
+                        object: self,
+                        userInfo: ["currentTime": self.currentTime, "duration": self.duration]
+                    )
                 } catch {
                     print("[AudioEngine] Seek buffer read failed: \(error)")
                 }
@@ -470,6 +580,11 @@ public final class AudioEngine: @unchecked Sendable {
         if playedSeconds >= 0 {
             self.currentTime = min(playedSeconds, duration)
             self.onProgressUpdate?(self.currentTime, self.duration)
+            NotificationCenter.default.post(
+                name: .audioEngineProgressDidUpdate,
+                object: self,
+                userInfo: ["currentTime": self.currentTime, "duration": self.duration]
+            )
 
             // Web app parity: Preload next track when 15 seconds remain
             if duration > 15 && (duration - currentTime) <= 15 && !preloadTriggered {
@@ -508,6 +623,14 @@ public final class AudioEngine: @unchecked Sendable {
         currentTempFileUrl = nil
         currentAudioFile = nil
     }
+}
+
+// MARK: - Notification Names
+
+extension Notification.Name {
+    public static let audioEngineTrackDidChange = Notification.Name("audioEngineTrackDidChange")
+    public static let audioEnginePlaybackStateDidChange = Notification.Name("audioEnginePlaybackStateDidChange")
+    public static let audioEngineProgressDidUpdate = Notification.Name("audioEngineProgressDidUpdate")
 }
 
 // MARK: - Stream Delegate Helper

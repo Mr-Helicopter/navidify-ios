@@ -7,14 +7,61 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		0664EC0A3065369300602CAD /* WidgetKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 0664EC093065369300602CAD /* WidgetKit.framework */; };
+		0664EC0C3065369300602CAD /* SwiftUI.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 0664EC0B3065369300602CAD /* SwiftUI.framework */; };
+		0664EC193065369300602CAD /* NavidifyWidgetExtension.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 0664EC073065369300602CAD /* NavidifyWidgetExtension.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		0664EC253065369300602CAD /* NavidifyKit in Frameworks */ = {isa = PBXBuildFile; productRef = 06EFF4813063DAAA0031C220 /* NavidifyKit */; };
 		06EFF4823063DAAA0031C220 /* NavidifyKit in Frameworks */ = {isa = PBXBuildFile; productRef = 06EFF4813063DAAA0031C220 /* NavidifyKit */; };
 /* End PBXBuildFile section */
 
+/* Begin PBXContainerItemProxy section */
+		0664EC173065369300602CAD /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 06EFF45D3063D98D0031C220 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 0664EC063065369300602CAD;
+			remoteInfo = NavidifyWidgetExtension;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		0664EC1A3065369300602CAD /* Embed Foundation Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			dstPath = "";
+			dstSubfolder = PlugIns;
+			files = (
+				0664EC193065369300602CAD /* NavidifyWidgetExtension.appex in Embed Foundation Extensions */,
+			);
+			name = "Embed Foundation Extensions";
+		};
+/* End PBXCopyFilesBuildPhase section */
+
 /* Begin PBXFileReference section */
+		0664EC073065369300602CAD /* NavidifyWidgetExtension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = NavidifyWidgetExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		0664EC093065369300602CAD /* WidgetKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = WidgetKit.framework; path = System/Library/Frameworks/WidgetKit.framework; sourceTree = SDKROOT; };
+		0664EC0B3065369300602CAD /* SwiftUI.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = SwiftUI.framework; path = System/Library/Frameworks/SwiftUI.framework; sourceTree = SDKROOT; };
 		06EFF4653063D98D0031C220 /* Navidify iOS.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Navidify iOS.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
+/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		0664EC1D3065369300602CAD /* Exceptions for "NavidifyWidget" folder in "NavidifyWidgetExtension" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = 0664EC063065369300602CAD /* NavidifyWidgetExtension */;
+		};
+/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
+
 /* Begin PBXFileSystemSynchronizedRootGroup section */
+		0664EC0D3065369300602CAD /* NavidifyWidget */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				0664EC1D3065369300602CAD /* Exceptions for "NavidifyWidget" folder in "NavidifyWidgetExtension" target */,
+			);
+			path = NavidifyWidget;
+			sourceTree = "<group>";
+		};
 		06EFF4673063D98D0031C220 /* Navidify iOS */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			path = "Navidify iOS";
@@ -23,6 +70,14 @@
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
+		0664EC043065369300602CAD /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			files = (
+				0664EC0C3065369300602CAD /* SwiftUI.framework in Frameworks */,
+				0664EC0A3065369300602CAD /* WidgetKit.framework in Frameworks */,
+				0664EC253065369300602CAD /* NavidifyKit in Frameworks */,
+			);
+		};
 		06EFF4623063D98D0031C220 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			files = (
@@ -32,10 +87,21 @@
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
+		0664EC083065369300602CAD /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+				0664EC093065369300602CAD /* WidgetKit.framework */,
+				0664EC0B3065369300602CAD /* SwiftUI.framework */,
+			);
+			name = Frameworks;
+			sourceTree = "<group>";
+		};
 		06EFF45C3063D98D0031C220 = {
 			isa = PBXGroup;
 			children = (
 				06EFF4673063D98D0031C220 /* Navidify iOS */,
+				0664EC0D3065369300602CAD /* NavidifyWidget */,
+				0664EC083065369300602CAD /* Frameworks */,
 				06EFF4663063D98D0031C220 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -44,6 +110,7 @@
 			isa = PBXGroup;
 			children = (
 				06EFF4653063D98D0031C220 /* Navidify iOS.app */,
+				0664EC073065369300602CAD /* NavidifyWidgetExtension.appex */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -51,6 +118,27 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
+		0664EC063065369300602CAD /* NavidifyWidgetExtension */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 0664EC1E3065369300602CAD /* Build configuration list for PBXNativeTarget "NavidifyWidgetExtension" */;
+			buildPhases = (
+				0664EC033065369300602CAD /* Sources */,
+				0664EC043065369300602CAD /* Frameworks */,
+				0664EC053065369300602CAD /* Resources */,
+			);
+			buildRules = (
+			);
+			fileSystemSynchronizedGroups = (
+				0664EC0D3065369300602CAD /* NavidifyWidget */,
+			);
+			name = NavidifyWidgetExtension;
+			packageProductDependencies = (
+				06EFF4813063DAAA0031C220 /* NavidifyKit */,
+			);
+			productName = NavidifyWidgetExtension;
+			productReference = 0664EC073065369300602CAD /* NavidifyWidgetExtension.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
 		06EFF4643063D98D0031C220 /* Navidify iOS */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = 06EFF4703063D98E0031C220 /* Build configuration list for PBXNativeTarget "Navidify iOS" */;
@@ -58,8 +146,12 @@
 				06EFF4613063D98D0031C220 /* Sources */,
 				06EFF4623063D98D0031C220 /* Frameworks */,
 				06EFF4633063D98D0031C220 /* Resources */,
+				0664EC1A3065369300602CAD /* Embed Foundation Extensions */,
 			);
 			buildRules = (
+			);
+			dependencies = (
+				0664EC183065369300602CAD /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
 				06EFF4673063D98D0031C220 /* Navidify iOS */,
@@ -82,6 +174,9 @@
 				LastSwiftUpdateCheck = 2700;
 				LastUpgradeCheck = 2700;
 				TargetAttributes = {
+					0664EC063065369300602CAD = {
+						CreatedOnToolsVersion = 27.0;
+					};
 					06EFF4643063D98D0031C220 = {
 						CreatedOnToolsVersion = 27.0;
 					};
@@ -105,11 +200,17 @@
 			projectRoot = "";
 			targets = (
 				06EFF4643063D98D0031C220 /* Navidify iOS */,
+				0664EC063065369300602CAD /* NavidifyWidgetExtension */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
+		0664EC053065369300602CAD /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			files = (
+			);
+		};
 		06EFF4633063D98D0031C220 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			files = (
@@ -118,6 +219,11 @@
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
+		0664EC033065369300602CAD /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			files = (
+			);
+		};
 		06EFF4613063D98D0031C220 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			files = (
@@ -125,7 +231,77 @@
 		};
 /* End PBXSourcesBuildPhase section */
 
+/* Begin PBXTargetDependency section */
+		0664EC183065369300602CAD /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 0664EC063065369300602CAD /* NavidifyWidgetExtension */;
+			targetProxy = 0664EC173065369300602CAD /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
 /* Begin XCBuildConfiguration section */
+		0664EC1B3065369300602CAD /* Debug configuration for PBXNativeTarget "NavidifyWidgetExtension" */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				ASSETCATALOG_COMPILER_WIDGET_BACKGROUND_COLOR_NAME = WidgetBackground;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 8ZGWW2Q3BM;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = NavidifyWidget/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = NavidifyWidget;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				IPHONEOS_DEPLOYMENT_TARGET = 27.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "Navidify.Navidify-iOS.NavidifyWidget";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		0664EC1C3065369300602CAD /* Release configuration for PBXNativeTarget "NavidifyWidgetExtension" */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				ASSETCATALOG_COMPILER_WIDGET_BACKGROUND_COLOR_NAME = WidgetBackground;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 8ZGWW2Q3BM;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = NavidifyWidget/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = NavidifyWidget;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				IPHONEOS_DEPLOYMENT_TARGET = 27.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "Navidify.Navidify-iOS.NavidifyWidget";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
 		06EFF46E3063D98E0031C220 /* Debug configuration for PBXProject "Navidify iOS" */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -257,7 +433,7 @@
 				DEVELOPMENT_TEAM = 8ZGWW2Q3BM;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = NO;
-				INFOPLIST_FILE = "Configuration/Info.plist";
+				INFOPLIST_FILE = Configuration/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
@@ -285,7 +461,7 @@
 				DEVELOPMENT_TEAM = 8ZGWW2Q3BM;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = NO;
-				INFOPLIST_FILE = "Configuration/Info.plist";
+				INFOPLIST_FILE = Configuration/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
@@ -306,6 +482,14 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
+		0664EC1E3065369300602CAD /* Build configuration list for PBXNativeTarget "NavidifyWidgetExtension" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				0664EC1B3065369300602CAD /* Debug configuration for PBXNativeTarget "NavidifyWidgetExtension" */,
+				0664EC1C3065369300602CAD /* Release configuration for PBXNativeTarget "NavidifyWidgetExtension" */,
+			);
+			defaultConfigurationName = Release;
+		};
 		06EFF4603063D98D0031C220 /* Build configuration list for PBXProject "Navidify iOS" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (

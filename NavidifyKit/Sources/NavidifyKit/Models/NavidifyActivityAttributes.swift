@@ -1,18 +1,27 @@
-#if canImport(ActivityKit)
+#if os(iOS) && canImport(ActivityKit)
 import ActivityKit
 import Foundation
 
 public struct NavidifyActivityAttributes: ActivityAttributes {
-    public struct ContentState: Codable, Hashable {
+    public struct ContentState: Codable, Hashable, Sendable {
         public var title: String
         public var artist: String
+        public var album: String
         public var isPlaying: Bool
         public var currentTime: Double
         public var duration: Double
 
-        public init(title: String, artist: String, isPlaying: Bool, currentTime: Double, duration: Double) {
+        public init(
+            title: String,
+            artist: String,
+            album: String = "",
+            isPlaying: Bool,
+            currentTime: Double,
+            duration: Double
+        ) {
             self.title = title
             self.artist = artist
+            self.album = album
             self.isPlaying = isPlaying
             self.currentTime = currentTime
             self.duration = duration
