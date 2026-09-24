@@ -10,6 +10,7 @@ public struct NavidifyActivityAttributes: ActivityAttributes {
         public var isPlaying: Bool
         public var currentTime: Double
         public var duration: Double
+        public var artworkPath: String?
 
         public init(
             title: String,
@@ -17,7 +18,8 @@ public struct NavidifyActivityAttributes: ActivityAttributes {
             album: String = "",
             isPlaying: Bool,
             currentTime: Double,
-            duration: Double
+            duration: Double,
+            artworkPath: String? = nil
         ) {
             self.title = title
             self.artist = artist
@@ -25,6 +27,7 @@ public struct NavidifyActivityAttributes: ActivityAttributes {
             self.isPlaying = isPlaying
             self.currentTime = currentTime
             self.duration = duration
+            self.artworkPath = artworkPath
         }
     }
 

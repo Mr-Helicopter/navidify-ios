@@ -9,6 +9,7 @@ public final class LiveActivityManager {
 
     private var currentActivity: Activity<NavidifyActivityAttributes>?
     private var lastProgressUpdateTime: Date = .distantPast
+    private var currentArtworkPath: String?
 
     private init() {
         bindAudioEngineNotifications()
@@ -58,13 +59,17 @@ public final class LiveActivityManager {
     public func startOrUpdateActivity(song: Song) {
         guard ActivityAuthorizationInfo().areActivitiesEnabled else { return }
 
+        let existingArtwork = SharedArtworkStore.shared.existingArtworkPath(for: song.id)
+        self.currentArtworkPath = existingArtwork
+
         let contentState = NavidifyActivityAttributes.ContentState(
             title: song.title,
             artist: song.effectiveArtist,
             album: song.effectiveAlbum,
             isPlaying: AudioEngine.shared.playbackState == .playing,
             currentTime: AudioEngine.shared.currentTime,
-            duration: song.duration
+            duration: song.duration,
+            artworkPath: existingArtwork
         )
 
         if let activity = currentActivity {
@@ -84,42 +89,56 @@ public final class LiveActivityManager {
                 print("[LiveActivityManager] Failed to start activity: \(error)")
             }
         }
-    }
 
-    public func updatePlaybackState(state: PlaybackState) {
-        guard let activity = currentActivity, let song = AudioEngine.shared.currentSong else { return }
-
-        let contentState = NavidifyActivityAttributes.ContentState(
-            title: song.title,
-            artist: song.effectiveArtist,
-            album: song.effectiveAlbum,
-            isPlaying: state == .playing,
-            currentTime: AudioEngine.shared.currentTime,
-            duration: song.duration
-        )
-
-        Task {
-            await activity.update(ActivityContent(state: contentState, staleDate: nil))
+        // Fetch artwork if not already cached
+        if existingArtwork == nil, let coverArtId = song.coverArt {
+            Task {
+                if let url = await NavidromeClient.shared.getCoverArtUrl(id: coverArtId, size: 300) {
+                    if let (data, _) = try? await URLSession.shared.data(from: url) {
+                        if let path = SharedArtworkStore.shared.saveArtwork(data: data, for: song.id) {
+                            await MainActor.run {
+                                guard AudioEngine.shared.currentSong?.id == song.id else { return }
+                                self.currentArtworkPath = path
+                                self.pushContentState(artworkPath: path)
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 
+    public func updatePlaybackState(state: PlaybackState) {
+        pushContentState(isPlaying: state == .playing)
+    }
+
     private func throttledProgressUpdate(currentTime: Double, duration: Double) {
-        guard let activity = currentActivity, let song = AudioEngine.shared.currentSong else { return }
         let now = Date()
         guard now.timeIntervalSince(lastProgressUpdateTime) >= 2.0 else { return }
         lastProgressUpdateTime = now
+        pushContentState(currentTime: currentTime, duration: duration)
+    }
 
-        let contentState = NavidifyActivityAttributes.ContentState(
+    private func pushContentState(
+        isPlaying: Bool? = nil,
+        currentTime: Double? = nil,
+        duration: Double? = nil,
+        artworkPath: String? = nil
+    ) {
+        guard let activity = currentActivity, let song = AudioEngine.shared.currentSong else { return }
+
+        let state = NavidifyActivityAttributes.ContentState(
             title: song.title,
             artist: song.effectiveArtist,
             album: song.effectiveAlbum,
-            isPlaying: AudioEngine.shared.playbackState == .playing,
-            currentTime: currentTime,
-            duration: duration
+            isPlaying: isPlaying ?? (AudioEngine.shared.playbackState == .playing),
+            currentTime: currentTime ?? AudioEngine.shared.currentTime,
+            duration: duration ?? song.duration,
+            artworkPath: artworkPath ?? self.currentArtworkPath
         )
 
         Task {
-            await activity.update(ActivityContent(state: contentState, staleDate: nil))
+            await activity.update(ActivityContent(state: state, staleDate: nil))
         }
     }
 
@@ -128,6 +147,7 @@ public final class LiveActivityManager {
         Task {
             await activity.end(nil, dismissalPolicy: .immediate)
             self.currentActivity = nil
+            self.currentArtworkPath = nil
         }
     }
 }
