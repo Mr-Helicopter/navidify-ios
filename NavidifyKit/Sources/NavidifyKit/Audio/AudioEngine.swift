@@ -1,0 +1,531 @@
+import Foundation
+import AVFoundation
+import Observation
+
+public enum PlaybackState: Sendable {
+    case stopped
+    case loading
+    case playing
+    case paused
+    case error(String)
+}
+
+public enum RepeatMode: String, CaseIterable, Sendable {
+    case off = "off"
+    case all = "all"
+    case one = "one"
+}
+
+@Observable
+public final class AudioEngine: @unchecked Sendable {
+    public static let shared = AudioEngine()
+
+    // MARK: - Observable State
+    public private(set) var currentSong: Song?
+    public private(set) var playbackState: PlaybackState = .stopped
+    public private(set) var currentTime: Double = 0.0
+    public private(set) var duration: Double = 0.0
+    public private(set) var isBuffering: Bool = false
+    public var volume: Float = 1.0 {
+        didSet {
+            engine.mainMixerNode.outputVolume = volume
+        }
+    }
+    public var isMuted: Bool = false {
+        didSet {
+            engine.mainMixerNode.outputVolume = isMuted ? 0 : volume
+        }
+    }
+
+    // Queue & Playback Modes
+    public var queue: [Song] = []
+    public var queueIndex: Int = 0
+    public var isShuffle: Bool = false
+    public var repeatMode: RepeatMode = .off
+
+    // Equalizer
+    public var isEQEnabled: Bool = true {
+        didSet {
+            updateEQGains()
+        }
+    }
+    public var selectedPresetName: String = "Flat" {
+        didSet {
+            if let preset = EQPresetConstants.presets[selectedPresetName] {
+                eqGains = preset.gains
+            }
+        }
+    }
+    public var eqGains: [Float] = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0] {
+        didSet {
+            updateEQGains()
+        }
+    }
+
+    // Callbacks for Lock Screen / MPRemoteCommandCenter
+    public var onTrackChange: (@Sendable (Song?) -> Void)?
+    public var onStateChange: (@Sendable (PlaybackState) -> Void)?
+    public var onProgressUpdate: (@Sendable (Double, Double) -> Void)?
+
+    // MARK: - Core Audio Units
+    private let engine = AVAudioEngine()
+    private let playerNodeA = AVAudioPlayerNode()
+    private let playerNodeB = AVAudioPlayerNode()
+    private let preEQMixer = AVAudioMixerNode()
+    private let eqNode = AVAudioUnitEQ(numberOfBands: 10)
+    private var activeSlot: ActiveSlot = .slotA
+
+    private enum ActiveSlot {
+        case slotA
+        case slotB
+
+        var other: ActiveSlot {
+            self == .slotA ? .slotB : .slotA
+        }
+    }
+
+    // Audio streaming & spooling state
+    private var currentAudioFile: AVAudioFile?
+    private var currentTempFileUrl: URL?
+    private var currentDownloadTask: URLSessionDataTask?
+    private var fileHandle: FileHandle?
+    private var scheduledFrames: AVAudioFramePosition = 0
+    private var totalFramesRead: AVAudioFramePosition = 0
+    private var audioFormat: AVAudioFormat?
+    private var sampleRate: Double = 44100.0
+
+    private var timeObserverTimer: Timer?
+    private var preloadTriggered = false
+    private var seekOffset: Double = 0.0
+    private let lock = NSLock()
+
+    private init() {
+        setupAudioSession()
+        setupAudioGraph()
+    }
+
+    private func setupAudioSession() {
+        #if os(iOS)
+        do {
+            let session = AVAudioSession.sharedInstance()
+            try session.setCategory(.playback, mode: .default, policy: .longFormAudio, options: [])
+            try session.setActive(true)
+        } catch {
+            print("[AudioEngine] Failed to set up AVAudioSession: \(error)")
+        }
+        #endif
+    }
+
+    private func setupAudioGraph() {
+        engine.attach(playerNodeA)
+        engine.attach(playerNodeB)
+        engine.attach(preEQMixer)
+        engine.attach(eqNode)
+
+        // Configure 10-band EQ frequencies matching web app
+        for i in 0..<10 {
+            let band = eqNode.bands[i]
+            band.frequency = EQPresetConstants.frequencies[i]
+            band.bypass = false
+            if i == 0 {
+                band.filterType = .lowShelf
+            } else if i == 9 {
+                band.filterType = .highShelf
+            } else {
+                band.filterType = .parametric
+                band.bandwidth = 1.0
+            }
+            band.gain = 0
+        }
+
+        let outputFormat = engine.outputNode.outputFormat(forBus: 0)
+        let sampleRate = outputFormat.sampleRate > 0 ? outputFormat.sampleRate : 44100.0
+        let channelCount = outputFormat.channelCount > 0 ? outputFormat.channelCount : 2
+        let canonicalFormat = AVAudioFormat(standardFormatWithSampleRate: sampleRate, channels: channelCount)!
+
+        // Connect both player nodes to preEQMixer (AVAudioMixerNode accepts multiple inputs)
+        engine.connect(playerNodeA, to: preEQMixer, format: canonicalFormat)
+        engine.connect(playerNodeB, to: preEQMixer, format: canonicalFormat)
+
+        // Connect mixer -> EQ -> mainMixerNode
+        engine.connect(preEQMixer, to: eqNode, format: canonicalFormat)
+        engine.connect(eqNode, to: engine.mainMixerNode, format: canonicalFormat)
+
+        do {
+            try engine.start()
+        } catch {
+            print("[AudioEngine] Engine start failed: \(error)")
+        }
+    }
+
+    private func updateEQGains() {
+        for (i, gain) in eqGains.enumerated() where i < 10 {
+            eqNode.bands[i].bypass = !isEQEnabled
+            eqNode.bands[i].gain = isEQEnabled ? gain : 0
+        }
+    }
+
+    // MARK: - Playback Control
+
+    public func play(song: Song) {
+        lock.lock()
+        defer { lock.unlock() }
+
+        // Stop and reset player nodes from previous track
+        activePlayerNode.stop()
+        inactivePlayerNode.stop()
+        activePlayerNode.reset()
+        inactivePlayerNode.reset()
+
+        self.currentSong = song
+        self.currentTime = 0.0
+        self.seekOffset = 0.0
+        self.duration = song.duration
+        self.preloadTriggered = false
+        self.playbackState = .loading
+        self.isBuffering = true
+
+        onTrackChange?(song)
+        onStateChange?(.loading)
+
+        Task {
+            if let streamUrl = await NavidromeClient.shared.getStreamUrl(songId: song.id) {
+                await self.startStreaming(url: streamUrl, song: song)
+            } else {
+                await MainActor.run {
+                    self.playbackState = .error("Failed to resolve stream URL")
+                    self.isBuffering = false
+                    self.onStateChange?(self.playbackState)
+                }
+            }
+        }
+    }
+
+    public func playQueue(songs: [Song], startIndex: Int = 0) {
+        guard !songs.isEmpty, startIndex >= 0, startIndex < songs.count else { return }
+        self.queue = songs
+        self.queueIndex = startIndex
+        play(song: songs[startIndex])
+    }
+
+    public func resume() {
+        guard currentSong != nil else { return }
+        if !engine.isRunning {
+            try? engine.start()
+        }
+        activePlayerNode.play()
+        playbackState = .playing
+        isBuffering = false
+        startTimeTimer()
+        onStateChange?(.playing)
+    }
+
+    public func pause() {
+        activePlayerNode.pause()
+        playbackState = .paused
+        stopTimeTimer()
+        onStateChange?(.paused)
+    }
+
+    public func togglePlayPause() {
+        if case .playing = playbackState {
+            pause()
+        } else {
+            resume()
+        }
+    }
+
+    public func next() {
+        guard !queue.isEmpty else { return }
+        if repeatMode == .one {
+            seek(to: 0)
+            return
+        }
+
+        var nextIndex = queueIndex + 1
+        if nextIndex >= queue.count {
+            if repeatMode == .all {
+                nextIndex = 0
+            } else {
+                stop()
+                return
+            }
+        }
+        queueIndex = nextIndex
+        play(song: queue[queueIndex])
+    }
+
+    public func previous() {
+        guard !queue.isEmpty else { return }
+        if currentTime > 3.0 {
+            seek(to: 0)
+            return
+        }
+
+        var prevIndex = queueIndex - 1
+        if prevIndex < 0 {
+            prevIndex = (repeatMode == .all) ? queue.count - 1 : 0
+        }
+        queueIndex = prevIndex
+        play(song: queue[queueIndex])
+    }
+
+    public func stop() {
+        stopTimeTimer()
+        activePlayerNode.stop()
+        inactivePlayerNode.stop()
+        currentDownloadTask?.cancel()
+        currentDownloadTask = nil
+        cleanupTempFile()
+
+        playbackState = .stopped
+        currentTime = 0
+        seekOffset = 0
+        isBuffering = false
+        onStateChange?(.stopped)
+    }
+
+    public func seek(to seconds: Double) {
+        guard currentSong != nil, let audioFile = currentAudioFile else { return }
+        let clampedSeconds = max(0, min(seconds, duration))
+        let targetFrame = AVAudioFramePosition(clampedSeconds * sampleRate)
+
+        activePlayerNode.stop()
+        self.seekOffset = clampedSeconds
+
+        let remainingFrames = max(0, audioFile.length - targetFrame)
+        if remainingFrames > 0 {
+            let framesToRead = AVAudioFrameCount(min(remainingFrames, AVAudioFramePosition(sampleRate * 20)))
+            audioFile.framePosition = targetFrame
+            if let buffer = AVAudioPCMBuffer(pcmFormat: audioFile.processingFormat, frameCapacity: framesToRead) {
+                do {
+                    try audioFile.read(into: buffer)
+                    activePlayerNode.scheduleBuffer(buffer, at: nil, options: [])
+                    activePlayerNode.play()
+                    self.currentTime = clampedSeconds
+                    self.scheduledFrames = targetFrame + AVAudioFramePosition(buffer.frameLength)
+                    self.playbackState = .playing
+                    self.onProgressUpdate?(self.currentTime, self.duration)
+                } catch {
+                    print("[AudioEngine] Seek buffer read failed: \(error)")
+                }
+            }
+        }
+    }
+
+    // MARK: - Streaming & Buffer Pipeline
+
+    private var activePlayerNode: AVAudioPlayerNode {
+        activeSlot == .slotA ? playerNodeA : playerNodeB
+    }
+
+    private var inactivePlayerNode: AVAudioPlayerNode {
+        activeSlot == .slotA ? playerNodeB : playerNodeA
+    }
+
+    private func startStreaming(url: URL, song: Song) async {
+        cleanupTempFile()
+
+        let tempDir = FileManager.default.temporaryDirectory
+        let tempUrl = tempDir.appendingPathComponent("navidify_stream_\(UUID().uuidString).\(song.suffix ?? "mp3")")
+        FileManager.default.createFile(atPath: tempUrl.path, contents: nil)
+
+        guard let handle = try? FileHandle(forWritingTo: tempUrl) else {
+            await MainActor.run {
+                self.playbackState = .error("Failed to create stream spool")
+                self.isBuffering = false
+            }
+            return
+        }
+
+        self.currentTempFileUrl = tempUrl
+        self.fileHandle = handle
+        self.scheduledFrames = 0
+        self.totalFramesRead = 0
+
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 30.0
+
+        let delegate = StreamDataDelegate { [weak self] data in
+            self?.didReceiveStreamChunk(data)
+        } onComplete: { [weak self] error in
+            self?.didCompleteStream(error: error)
+        }
+
+        let session = URLSession(configuration: .default, delegate: delegate, delegateQueue: nil)
+        let task = session.dataTask(with: request)
+        self.currentDownloadTask = task
+        task.resume()
+    }
+
+    private func didReceiveStreamChunk(_ chunk: Data) {
+        lock.lock()
+        defer { lock.unlock() }
+
+        guard let handle = fileHandle else { return }
+        do {
+            try handle.write(contentsOf: chunk)
+            try? handle.synchronize()
+        } catch {
+            return
+        }
+
+        // Initialize audio file once sufficient data is spooled (> 64KB)
+        if currentAudioFile == nil, let tempUrl = currentTempFileUrl {
+            let fileSize = (try? FileManager.default.attributesOfItem(atPath: tempUrl.path)[.size] as? UInt64) ?? 0
+            if fileSize > 65536 {
+                if let file = try? AVAudioFile(forReading: tempUrl) {
+                    self.currentAudioFile = file
+                    self.audioFormat = file.processingFormat
+                    self.sampleRate = file.processingFormat.sampleRate
+
+                    // Dynamically connect activePlayerNode with file's format to match buffer format
+                    self.engine.disconnectNodeOutput(self.activePlayerNode)
+                    self.engine.connect(self.activePlayerNode, to: self.preEQMixer, format: file.processingFormat)
+
+                    scheduleNextBuffers()
+
+                    DispatchQueue.main.async { [weak self] in
+                        guard let self = self else { return }
+                        if !self.engine.isRunning {
+                            try? self.engine.start()
+                        }
+                        self.activePlayerNode.play()
+                        self.playbackState = .playing
+                        self.isBuffering = false
+                        self.startTimeTimer()
+                        self.onStateChange?(.playing)
+                    }
+                }
+            }
+        } else if currentAudioFile != nil {
+            scheduleNextBuffers()
+        }
+    }
+
+    private func scheduleNextBuffers() {
+        guard let file = currentAudioFile else { return }
+        // Re-read file length as it grows
+        let currentLength = file.length
+        let unreadFrames = currentLength - scheduledFrames
+
+        // Immediate initial playback threshold (0.5s) vs steady state buffer (5s)
+        let minInitialFrames = AVAudioFramePosition(sampleRate * 0.5)
+        let chunkFrames = AVAudioFramePosition(sampleRate * 5)
+        let threshold = (scheduledFrames == 0) ? minInitialFrames : chunkFrames
+
+        if unreadFrames >= threshold {
+            let framesToRead = AVAudioFrameCount(min(unreadFrames, chunkFrames))
+            file.framePosition = scheduledFrames
+            if let buffer = AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: framesToRead) {
+                do {
+                    try file.read(into: buffer)
+                    activePlayerNode.scheduleBuffer(buffer, at: nil, options: [])
+                    scheduledFrames += AVAudioFramePosition(buffer.frameLength)
+                } catch {
+                    // File still being written, retry on next chunk
+                }
+            }
+        }
+    }
+
+    private func didCompleteStream(error: Error?) {
+        guard error == nil, let file = currentAudioFile else { return }
+        // Schedule any remaining tail frames
+        let remaining = file.length - scheduledFrames
+        if remaining > 0 {
+            file.framePosition = scheduledFrames
+            if let buffer = AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: AVAudioFrameCount(remaining)) {
+                try? file.read(into: buffer)
+                activePlayerNode.scheduleBuffer(buffer, at: nil, options: [])
+                scheduledFrames += AVAudioFramePosition(buffer.frameLength)
+            }
+        }
+    }
+
+    private func startTimeTimer() {
+        stopTimeTimer()
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+            self.timeObserverTimer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
+                self?.handleTimeTick()
+            }
+        }
+    }
+
+    private func stopTimeTimer() {
+        DispatchQueue.main.async {
+            self.timeObserverTimer?.invalidate()
+            self.timeObserverTimer = nil
+        }
+    }
+
+    private func handleTimeTick() {
+        guard case .playing = playbackState, let nodeTime = activePlayerNode.lastRenderTime,
+              let playerTime = activePlayerNode.playerTime(forNodeTime: nodeTime) else {
+            return
+        }
+
+        let playedSeconds = seekOffset + (Double(playerTime.sampleTime) / sampleRate)
+        if playedSeconds >= 0 {
+            self.currentTime = min(playedSeconds, duration)
+            self.onProgressUpdate?(self.currentTime, self.duration)
+
+            // Web app parity: Preload next track when 15 seconds remain
+            if duration > 15 && (duration - currentTime) <= 15 && !preloadTriggered {
+                preloadTriggered = true
+                preloadNextTrack()
+            }
+
+            // Track finished check
+            if duration > 0 && currentTime >= (duration - 0.5) {
+                next()
+            }
+        }
+    }
+
+    private func preloadNextTrack() {
+        let nextIndex = queueIndex + 1
+        if nextIndex < queue.count {
+            let nextSong = queue[nextIndex]
+            Task {
+                if let streamUrl = await NavidromeClient.shared.getStreamUrl(songId: nextSong.id) {
+                    // Prewarm HTTP connection / cache for next track
+                    var req = URLRequest(url: streamUrl)
+                    req.httpMethod = "HEAD"
+                    _ = try? await URLSession.shared.data(for: req)
+                }
+            }
+        }
+    }
+
+    private func cleanupTempFile() {
+        fileHandle?.closeFile()
+        fileHandle = nil
+        if let url = currentTempFileUrl {
+            try? FileManager.default.removeItem(at: url)
+        }
+        currentTempFileUrl = nil
+        currentAudioFile = nil
+    }
+}
+
+// MARK: - Stream Delegate Helper
+
+private final class StreamDataDelegate: NSObject, URLSessionDataDelegate, @unchecked Sendable {
+    private let onData: @Sendable (Data) -> Void
+    private let onComplete: @Sendable (Error?) -> Void
+
+    init(onData: @escaping @Sendable (Data) -> Void, onComplete: @escaping @Sendable (Error?) -> Void) {
+        self.onData = onData
+        self.onComplete = onComplete
+    }
+
+    func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
+        onData(data)
+    }
+
+    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+        onComplete(error)
+    }
+}
