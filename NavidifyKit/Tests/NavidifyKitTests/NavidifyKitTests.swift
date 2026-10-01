@@ -1,4 +1,5 @@
 import XCTest
+import AVFoundation
 @testable import NavidifyKit
 
 final class NavidifyKitTests: XCTestCase {

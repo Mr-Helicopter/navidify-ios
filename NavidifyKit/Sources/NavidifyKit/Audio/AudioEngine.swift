@@ -509,15 +509,14 @@ public final class AudioEngine: @unchecked Sendable {
         guard let handle = fileHandle else { return }
         do {
             try handle.write(contentsOf: chunk)
-            try? handle.synchronize()
         } catch {
             return
         }
 
-        // Initialize audio file once sufficient data is spooled (> 64KB)
+        // Initialize audio file once healthy initial pre-buffer is spooled (>= 256KB, ~6.5s of audio)
         if currentAudioFile == nil, let tempUrl = currentTempFileUrl {
             let fileSize = (try? FileManager.default.attributesOfItem(atPath: tempUrl.path)[.size] as? UInt64) ?? 0
-            if fileSize > 65536 {
+            if fileSize >= 262_144 {
                 if let file = try? AVAudioFile(forReading: tempUrl) {
                     self.currentAudioFile = file
                     self.audioFormat = file.processingFormat
@@ -554,9 +553,9 @@ public final class AudioEngine: @unchecked Sendable {
 
         guard let tempUrl = currentTempFileUrl else { return }
 
-        // If we already have 30s buffered ahead, avoid disk I/O unless forced final
+        // If we already have 20s buffered ahead, avoid disk I/O unless forced final
         let playedFrames = AVAudioFramePosition(currentTime * sampleRate)
-        let maxLookahead = AVAudioFramePosition(sampleRate * 30.0) // 30s rolling lookahead
+        let maxLookahead = AVAudioFramePosition(sampleRate * 20.0) // 20s rolling lookahead
         let currentBuffered = scheduledFrames - playedFrames
         if currentBuffered >= maxLookahead && !isFinal {
             return
@@ -568,7 +567,8 @@ public final class AudioEngine: @unchecked Sendable {
         let currentLength = file.length
         guard currentLength > 0 else { return }
 
-        let chunkFrames = AVAudioFramePosition(sampleRate * 5.0) // 5-second buffer chunks
+        let chunkFrames = AVAudioFramePosition(sampleRate * 5.0)     // 5-second buffer chunks
+        let minChunkFrames = AVAudioFramePosition(sampleRate * 2.5)  // Min 2.5s to prevent buffer fragmentation
         let currentGen = self.playbackGeneration
 
         while scheduledFrames < currentLength {
@@ -578,8 +578,8 @@ public final class AudioEngine: @unchecked Sendable {
             }
 
             let unreadFrames = currentLength - scheduledFrames
-            let minThreshold: AVAudioFramePosition = (scheduledFrames == 0) ? AVAudioFramePosition(sampleRate * 0.5) : (isFinal ? 1 : chunkFrames)
-            if unreadFrames < minThreshold && !isFinal {
+            // Require at least 2.5s of unread frames unless stream is complete
+            if unreadFrames < minChunkFrames && !isFinal {
                 break
             }
 
@@ -593,6 +593,10 @@ public final class AudioEngine: @unchecked Sendable {
 
             do {
                 try file.read(into: buffer)
+                // Prevent scheduling tiny fragments (< 1.5s) while stream is still in progress
+                if buffer.frameLength < AVAudioFrameCount(sampleRate * 1.5) && !isFinal {
+                    break
+                }
                 activeBuffersCount += 1
                 activePlayerNode.scheduleBuffer(buffer, at: nil, options: []) { [weak self] in
                     self?.handleBufferCompleted(generation: currentGen)
