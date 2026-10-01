@@ -97,11 +97,21 @@ final class NavidifyKitTests: XCTestCase {
         let engine = AudioEngine.shared
         engine.play(song: firstSong)
 
-        // Wait 3.5 seconds for stream spooling, buffer schedule, and engine.play()
-        try await Task.sleep(nanoseconds: 3_500_000_000)
+        for second in 1...4 {
+            try await Task.sleep(nanoseconds: 1_000_000_000)
+            print("INITIAL PLAY SECOND \(second): state=\(engine.playbackState) currentTime=\(engine.currentTime)")
+        }
+        XCTAssertGreaterThan(engine.currentTime, 2.5)
 
-        print("PLAYBACK STATE: \(engine.playbackState)")
-        print("CURRENT TIME: \(engine.currentTime)")
+        print("TESTING SEEK TO 30.0s...")
+        engine.seek(to: 30.0)
+
+        for second in 1...3 {
+            try await Task.sleep(nanoseconds: 1_000_000_000)
+            print("POST-SEEK SECOND \(second): state=\(engine.playbackState) currentTime=\(engine.currentTime)")
+        }
+        XCTAssertGreaterThan(engine.currentTime, 31.5)
+
         XCTAssertEqual(engine.currentSong?.id, firstSong.id)
         engine.stop()
     }

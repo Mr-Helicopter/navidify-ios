@@ -116,10 +116,15 @@ public final class AudioEngine: @unchecked Sendable {
     private var audioFormat: AVAudioFormat?
     private var sampleRate: Double = 44100.0
 
+    private var isStreamComplete = false
+    private var activeBuffersCount: Int = 0
+    private var playbackGeneration: Int = 0
+    private var isTransitioningTrack = false
+
     private var timeObserverTimer: Timer?
     private var preloadTriggered = false
     private var seekOffset: Double = 0.0
-    private let lock = NSLock()
+    private let lock = NSRecursiveLock()
 
     private init() {
         setupAudioSession()
@@ -276,6 +281,11 @@ public final class AudioEngine: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
 
+        playbackGeneration += 1
+        activeBuffersCount = 0
+        isStreamComplete = false
+        isTransitioningTrack = false
+
         // Stop and reset player nodes from previous track
         activePlayerNode.stop()
         inactivePlayerNode.stop()
@@ -295,7 +305,7 @@ public final class AudioEngine: @unchecked Sendable {
 
         Task {
             if let streamUrl = await NavidromeClient.shared.getStreamUrl(songId: song.id) {
-                await self.startStreaming(url: streamUrl, song: song)
+                self.startStreaming(url: streamUrl, song: song)
             } else {
                 await MainActor.run {
                     self.playbackState = .error("Failed to resolve stream URL")
@@ -376,6 +386,14 @@ public final class AudioEngine: @unchecked Sendable {
     }
 
     public func stop() {
+        lock.lock()
+        defer { lock.unlock() }
+
+        playbackGeneration += 1
+        activeBuffersCount = 0
+        isStreamComplete = false
+        isTransitioningTrack = false
+
         stopTimeTimer()
         activePlayerNode.stop()
         inactivePlayerNode.stop()
@@ -391,36 +409,48 @@ public final class AudioEngine: @unchecked Sendable {
     }
 
     public func seek(to seconds: Double) {
-        guard currentSong != nil, let audioFile = currentAudioFile else { return }
-        let clampedSeconds = max(0, min(seconds, duration))
+        lock.lock()
+        defer { lock.unlock() }
+
+        guard currentSong != nil, let tempUrl = currentTempFileUrl else { return }
+
+        // Reopen audio file to query latest available length on disk
+        guard let audioFile = try? AVAudioFile(forReading: tempUrl) else { return }
+        self.currentAudioFile = audioFile
+
+        let fileDuration = Double(audioFile.length) / sampleRate
+        let maxSeekable = isStreamComplete ? max(fileDuration, duration) : fileDuration
+        let clampedSeconds = max(0, min(seconds, max(0, maxSeekable - 0.25)))
         let targetFrame = AVAudioFramePosition(clampedSeconds * sampleRate)
 
-        activePlayerNode.stop()
-        self.seekOffset = clampedSeconds
+        let wasPlaying = (playbackState == .playing)
 
-        let remainingFrames = max(0, audioFile.length - targetFrame)
-        if remainingFrames > 0 {
-            let framesToRead = AVAudioFrameCount(min(remainingFrames, AVAudioFramePosition(sampleRate * 20)))
-            audioFile.framePosition = targetFrame
-            if let buffer = AVAudioPCMBuffer(pcmFormat: audioFile.processingFormat, frameCapacity: framesToRead) {
-                do {
-                    try audioFile.read(into: buffer)
-                    activePlayerNode.scheduleBuffer(buffer, at: nil, options: [])
-                    activePlayerNode.play()
-                    self.currentTime = clampedSeconds
-                    self.scheduledFrames = targetFrame + AVAudioFramePosition(buffer.frameLength)
-                    self.playbackState = .playing
-                    self.onProgressUpdate?(self.currentTime, self.duration)
-                    NotificationCenter.default.post(
-                        name: .audioEngineProgressDidUpdate,
-                        object: self,
-                        userInfo: ["currentTime": self.currentTime, "duration": self.duration]
-                    )
-                } catch {
-                    print("[AudioEngine] Seek buffer read failed: \(error)")
-                }
+        activePlayerNode.stop()
+        activePlayerNode.reset()
+
+        playbackGeneration += 1
+        activeBuffersCount = 0
+
+        self.seekOffset = clampedSeconds
+        self.currentTime = clampedSeconds
+        self.scheduledFrames = min(targetFrame, audioFile.length)
+
+        scheduleNextBuffers()
+
+        if wasPlaying {
+            if !engine.isRunning {
+                try? engine.start()
             }
+            activePlayerNode.play()
+            self.playbackState = .playing
         }
+
+        self.onProgressUpdate?(self.currentTime, self.duration)
+        NotificationCenter.default.post(
+            name: .audioEngineProgressDidUpdate,
+            object: self,
+            userInfo: ["currentTime": self.currentTime, "duration": self.duration]
+        )
     }
 
     // MARK: - Streaming & Buffer Pipeline
@@ -433,7 +463,7 @@ public final class AudioEngine: @unchecked Sendable {
         activeSlot == .slotA ? playerNodeB : playerNodeA
     }
 
-    private func startStreaming(url: URL, song: Song) async {
+    private func startStreaming(url: URL, song: Song) {
         cleanupTempFile()
 
         let tempDir = FileManager.default.temporaryDirectory
@@ -441,17 +471,21 @@ public final class AudioEngine: @unchecked Sendable {
         FileManager.default.createFile(atPath: tempUrl.path, contents: nil)
 
         guard let handle = try? FileHandle(forWritingTo: tempUrl) else {
-            await MainActor.run {
+            DispatchQueue.main.async {
                 self.playbackState = .error("Failed to create stream spool")
                 self.isBuffering = false
             }
             return
         }
 
+        lock.lock()
         self.currentTempFileUrl = tempUrl
         self.fileHandle = handle
         self.scheduledFrames = 0
         self.totalFramesRead = 0
+        self.activeBuffersCount = 0
+        self.isStreamComplete = false
+        lock.unlock()
 
         var request = URLRequest(url: url)
         request.timeoutInterval = 30.0
@@ -497,6 +531,7 @@ public final class AudioEngine: @unchecked Sendable {
 
                     DispatchQueue.main.async { [weak self] in
                         guard let self = self else { return }
+                        guard case .loading = self.playbackState else { return }
                         if !self.engine.isRunning {
                             try? self.engine.start()
                         }
@@ -513,44 +548,129 @@ public final class AudioEngine: @unchecked Sendable {
         }
     }
 
-    private func scheduleNextBuffers() {
-        guard let file = currentAudioFile else { return }
-        // Re-read file length as it grows
+    private func scheduleNextBuffers(isFinal: Bool = false) {
+        lock.lock()
+        defer { lock.unlock() }
+
+        guard let tempUrl = currentTempFileUrl else { return }
+
+        // If we already have 30s buffered ahead, avoid disk I/O unless forced final
+        let playedFrames = AVAudioFramePosition(currentTime * sampleRate)
+        let maxLookahead = AVAudioFramePosition(sampleRate * 30.0) // 30s rolling lookahead
+        let currentBuffered = scheduledFrames - playedFrames
+        if currentBuffered >= maxLookahead && !isFinal {
+            return
+        }
+
+        guard let file = try? AVAudioFile(forReading: tempUrl) else { return }
+        self.currentAudioFile = file
+
         let currentLength = file.length
-        let unreadFrames = currentLength - scheduledFrames
+        guard currentLength > 0 else { return }
 
-        // Immediate initial playback threshold (0.5s) vs steady state buffer (5s)
-        let minInitialFrames = AVAudioFramePosition(sampleRate * 0.5)
-        let chunkFrames = AVAudioFramePosition(sampleRate * 5)
-        let threshold = (scheduledFrames == 0) ? minInitialFrames : chunkFrames
+        let chunkFrames = AVAudioFramePosition(sampleRate * 5.0) // 5-second buffer chunks
+        let currentGen = self.playbackGeneration
 
-        if unreadFrames >= threshold {
-            let framesToRead = AVAudioFrameCount(min(unreadFrames, chunkFrames))
-            file.framePosition = scheduledFrames
-            if let buffer = AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: framesToRead) {
-                do {
-                    try file.read(into: buffer)
-                    activePlayerNode.scheduleBuffer(buffer, at: nil, options: [])
-                    scheduledFrames += AVAudioFramePosition(buffer.frameLength)
-                } catch {
-                    // File still being written, retry on next chunk
-                }
+        while scheduledFrames < currentLength {
+            let bufferedAhead = scheduledFrames - playedFrames
+            if bufferedAhead >= maxLookahead && !isFinal {
+                break
             }
+
+            let unreadFrames = currentLength - scheduledFrames
+            let minThreshold: AVAudioFramePosition = (scheduledFrames == 0) ? AVAudioFramePosition(sampleRate * 0.5) : (isFinal ? 1 : chunkFrames)
+            if unreadFrames < minThreshold && !isFinal {
+                break
+            }
+
+            let framesToRead = AVAudioFrameCount(min(unreadFrames, chunkFrames))
+            if framesToRead == 0 { break }
+
+            file.framePosition = scheduledFrames
+            guard let buffer = AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: framesToRead) else {
+                break
+            }
+
+            do {
+                try file.read(into: buffer)
+                activeBuffersCount += 1
+                activePlayerNode.scheduleBuffer(buffer, at: nil, options: []) { [weak self] in
+                    self?.handleBufferCompleted(generation: currentGen)
+                }
+                scheduledFrames += AVAudioFramePosition(buffer.frameLength)
+            } catch {
+                break
+            }
+        }
+
+        // Buffer starvation recovery: if playing state but node stopped due to buffer starvation
+        if playbackState == .playing && !activePlayerNode.isPlaying && scheduledFrames > playedFrames {
+            if !engine.isRunning {
+                try? engine.start()
+            }
+            activePlayerNode.play()
+        }
+    }
+
+    private func handleBufferCompleted(generation: Int) {
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            guard let self = self else { return }
+            self.lock.lock()
+            defer { self.lock.unlock() }
+
+            // Stale generation from previous track or seek
+            guard self.playbackGeneration == generation else { return }
+            self.activeBuffersCount = max(0, self.activeBuffersCount - 1)
+
+            // Track completion: stream finished, all frames scheduled, and all buffers rendered
+            if self.isStreamComplete,
+               let file = self.currentAudioFile,
+               self.scheduledFrames >= file.length,
+               self.activeBuffersCount == 0 {
+                DispatchQueue.main.async { [weak self] in
+                    self?.handleTrackFinished()
+                }
+                return
+            }
+
+            // Continuous replenishment
+            self.scheduleNextBuffers()
+        }
+    }
+
+    private func handleTrackFinished() {
+        guard !isTransitioningTrack, playbackState != .stopped else { return }
+        isTransitioningTrack = true
+        defer {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
+                self?.isTransitioningTrack = false
+            }
+        }
+
+        if repeatMode == .one {
+            seek(to: 0)
+        } else {
+            next()
         }
     }
 
     private func didCompleteStream(error: Error?) {
-        guard error == nil, let file = currentAudioFile else { return }
-        // Schedule any remaining tail frames
-        let remaining = file.length - scheduledFrames
-        if remaining > 0 {
-            file.framePosition = scheduledFrames
-            if let buffer = AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: AVAudioFrameCount(remaining)) {
-                try? file.read(into: buffer)
-                activePlayerNode.scheduleBuffer(buffer, at: nil, options: [])
-                scheduledFrames += AVAudioFramePosition(buffer.frameLength)
+        lock.lock()
+        defer { lock.unlock() }
+
+        guard error == nil, let tempUrl = currentTempFileUrl else { return }
+        try? fileHandle?.synchronize()
+        self.isStreamComplete = true
+
+        if let file = try? AVAudioFile(forReading: tempUrl) {
+            self.currentAudioFile = file
+            let exactDuration = Double(file.length) / file.processingFormat.sampleRate
+            if exactDuration > 0 {
+                self.duration = exactDuration
             }
         }
+
+        scheduleNextBuffers(isFinal: true)
     }
 
     private func startTimeTimer() {
@@ -586,15 +706,22 @@ public final class AudioEngine: @unchecked Sendable {
                 userInfo: ["currentTime": self.currentTime, "duration": self.duration]
             )
 
+            // Maintain rolling buffer ahead of playhead (15s minimum lookahead)
+            let playedFrames = AVAudioFramePosition(currentTime * sampleRate)
+            let bufferedAhead = scheduledFrames - playedFrames
+            if bufferedAhead < AVAudioFramePosition(sampleRate * 15.0) {
+                scheduleNextBuffers()
+            }
+
             // Web app parity: Preload next track when 15 seconds remain
             if duration > 15 && (duration - currentTime) <= 15 && !preloadTriggered {
                 preloadTriggered = true
                 preloadNextTrack()
             }
 
-            // Track finished check
+            // Fallback track finished check if duration reached
             if duration > 0 && currentTime >= (duration - 0.5) {
-                next()
+                handleTrackFinished()
             }
         }
     }
@@ -615,6 +742,9 @@ public final class AudioEngine: @unchecked Sendable {
     }
 
     private func cleanupTempFile() {
+        lock.lock()
+        defer { lock.unlock() }
+
         fileHandle?.closeFile()
         fileHandle = nil
         if let url = currentTempFileUrl {
@@ -622,6 +752,8 @@ public final class AudioEngine: @unchecked Sendable {
         }
         currentTempFileUrl = nil
         currentAudioFile = nil
+        isStreamComplete = false
+        activeBuffersCount = 0
     }
 }
 
