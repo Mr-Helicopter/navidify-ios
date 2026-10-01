@@ -1,6 +1,7 @@
 #if canImport(ActivityKit)
 import ActivityKit
 import Foundation
+import UIKit
 import NavidifyKit
 
 @MainActor
@@ -54,6 +55,25 @@ public final class LiveActivityManager {
                   let duration = notification.userInfo?["duration"] as? Double else { return }
             self.throttledProgressUpdate(currentTime: currentTime, duration: duration)
         }
+
+        // Clean up immediately if app process is terminated from recents
+        NotificationCenter.default.addObserver(
+            forName: UIApplication.willTerminateNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.endAllActivitiesSync()
+        }
+    }
+
+    public func cleanUpExistingActivities() async {
+        let existing = Activity<NavidifyActivityAttributes>.activities
+        guard !existing.isEmpty else { return }
+        for activity in existing {
+            await activity.end(nil, dismissalPolicy: .immediate)
+        }
+        self.currentActivity = nil
+        self.currentArtworkPath = nil
     }
 
     public func startOrUpdateActivity(song: Song) {
@@ -72,7 +92,20 @@ public final class LiveActivityManager {
             artworkPath: existingArtwork
         )
 
-        if let activity = currentActivity {
+        // Reuse an existing activity if already present, or clean up any extra duplicates
+        let allActivities = Activity<NavidifyActivityAttributes>.activities
+        let activityToUse = currentActivity ?? allActivities.first
+
+        if allActivities.count > 1 {
+            for extra in allActivities where extra.id != activityToUse?.id {
+                Task.detached(priority: .background) {
+                    await extra.end(nil, dismissalPolicy: .immediate)
+                }
+            }
+        }
+
+        if let activity = activityToUse {
+            self.currentActivity = activity
             Task {
                 await activity.update(ActivityContent(state: contentState, staleDate: nil))
             }
@@ -143,12 +176,48 @@ public final class LiveActivityManager {
     }
 
     public func endActivity() {
-        guard let activity = currentActivity else { return }
-        Task {
-            await activity.end(nil, dismissalPolicy: .immediate)
+        let activities = Activity<NavidifyActivityAttributes>.activities
+        guard !activities.isEmpty else {
             self.currentActivity = nil
             self.currentArtworkPath = nil
+            return
         }
+        Task.detached(priority: .userInitiated) {
+            for activity in activities {
+                await activity.end(nil, dismissalPolicy: .immediate)
+            }
+            await MainActor.run {
+                LiveActivityManager.shared.currentActivity = nil
+                LiveActivityManager.shared.currentArtworkPath = nil
+            }
+        }
+    }
+
+    public func endAllActivitiesSync() {
+        let activities = Activity<NavidifyActivityAttributes>.activities
+        guard !activities.isEmpty else {
+            self.currentActivity = nil
+            self.currentArtworkPath = nil
+            return
+        }
+
+        let semaphore = DispatchSemaphore(value: 0)
+        let bgTask = UIApplication.shared.beginBackgroundTask {
+            semaphore.signal()
+        }
+
+        Task.detached(priority: .userInitiated) {
+            for activity in activities {
+                await activity.end(nil, dismissalPolicy: .immediate)
+            }
+            UIApplication.shared.endBackgroundTask(bgTask)
+            semaphore.signal()
+        }
+
+        // Wait up to 1.5s for ActivityKit IPC daemon to dismiss live activity before process termination
+        _ = semaphore.wait(timeout: .now() + 1.5)
+        self.currentActivity = nil
+        self.currentArtworkPath = nil
     }
 }
 #endif
