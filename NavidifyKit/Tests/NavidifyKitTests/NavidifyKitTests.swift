@@ -98,21 +98,28 @@ final class NavidifyKitTests: XCTestCase {
         let engine = AudioEngine.shared
         engine.play(song: firstSong)
 
-        for second in 1...4 {
+        var waited = 0
+        while engine.playbackState != .playing && waited < 15 {
             try await Task.sleep(nanoseconds: 1_000_000_000)
-            print("INITIAL PLAY SECOND \(second): state=\(engine.playbackState) currentTime=\(engine.currentTime)")
+            waited += 1
+            print("WAITING FOR PLAYING T+\(waited)s: state=\(engine.playbackState) currentTime=\(engine.currentTime)")
         }
-        XCTAssertGreaterThan(engine.currentTime, 1.5)
-
-        print("TESTING SEEK TO 30.0s...")
-        engine.seek(to: 30.0)
 
         for second in 1...3 {
             try await Task.sleep(nanoseconds: 1_000_000_000)
-            print("POST-SEEK SECOND \(second): state=\(engine.playbackState) currentTime=\(engine.currentTime)")
+            print("PLAYING SECOND \(second): state=\(engine.playbackState) currentTime=\(engine.currentTime)")
         }
-        XCTAssertGreaterThan(engine.currentTime, 31.5)
 
+        print("TESTING SEEK TO 110.0s (THE MIDDLE)...")
+        engine.seek(to: 110.0)
+
+        for second in 1...6 {
+            try await Task.sleep(nanoseconds: 1_000_000_000)
+            print("POST-SEEK SECOND \(second): state=\(engine.playbackState) currentTime=\(engine.currentTime) isBuffering=\(engine.isBuffering)")
+        }
+
+        XCTAssertGreaterThan(engine.currentTime, 114.0)
+        XCTAssertEqual(engine.playbackState, .playing)
         XCTAssertEqual(engine.currentSong?.id, firstSong.id)
         engine.stop()
     }
