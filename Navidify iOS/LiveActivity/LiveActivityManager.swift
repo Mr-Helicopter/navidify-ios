@@ -8,11 +8,18 @@ import NavidifyKit
 public final class LiveActivityManager {
     public static let shared = LiveActivityManager()
 
+    /// When false, ActivityKit Live Activities are disabled to prevent duplicate Lock Screen banners,
+    /// relying entirely on iOS native MPNowPlayingInfoCenter for Lock Screen and Dynamic Island.
+    public static var isEnabled: Bool = false
+
     private var currentActivity: Activity<NavidifyActivityAttributes>?
     private var lastProgressUpdateTime: Date = .distantPast
     private var currentArtworkPath: String?
 
     private init() {
+        Task {
+            await self.cleanUpExistingActivities()
+        }
         bindAudioEngineNotifications()
     }
 
@@ -77,6 +84,10 @@ public final class LiveActivityManager {
     }
 
     public func startOrUpdateActivity(song: Song) {
+        guard Self.isEnabled else {
+            // Live Activities disabled in favor of iOS native Now Playing player
+            return
+        }
         guard ActivityAuthorizationInfo().areActivitiesEnabled else { return }
 
         let existingArtwork = SharedArtworkStore.shared.existingArtworkPath(for: song.id)
@@ -142,10 +153,12 @@ public final class LiveActivityManager {
     }
 
     public func updatePlaybackState(state: PlaybackState) {
+        guard Self.isEnabled else { return }
         pushContentState(isPlaying: state == .playing)
     }
 
     private func throttledProgressUpdate(currentTime: Double, duration: Double) {
+        guard Self.isEnabled else { return }
         let now = Date()
         guard now.timeIntervalSince(lastProgressUpdateTime) >= 2.0 else { return }
         lastProgressUpdateTime = now

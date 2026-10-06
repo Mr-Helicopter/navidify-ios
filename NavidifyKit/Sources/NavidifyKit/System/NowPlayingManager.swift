@@ -103,47 +103,30 @@ public final class NowPlayingManager: @unchecked Sendable {
             return .success
         }
 
-        // Skip 15s forward
-        commandCenter.skipForwardCommand.isEnabled = true
-        commandCenter.skipForwardCommand.preferredIntervals = [15.0]
-        commandCenter.skipForwardCommand.addTarget { [weak self] _ in
-            guard let self = self else { return .commandFailed }
-            let target = min(self.audioEngine.duration, self.audioEngine.currentTime + 15.0)
-            self.audioEngine.seek(to: target)
-            return .success
-        }
-
-        // Skip 15s backward
-        commandCenter.skipBackwardCommand.isEnabled = true
-        commandCenter.skipBackwardCommand.preferredIntervals = [15.0]
-        commandCenter.skipBackwardCommand.addTarget { [weak self] _ in
-            guard let self = self else { return .commandFailed }
-            let target = max(0.0, self.audioEngine.currentTime - 15.0)
-            self.audioEngine.seek(to: target)
-            return .success
-        }
+        // Disable 15s skip commands so iOS Lock Screen displays Next/Previous track buttons
+        commandCenter.skipForwardCommand.isEnabled = false
+        commandCenter.skipBackwardCommand.isEnabled = false
 
         // Like / Star
         commandCenter.likeCommand.isEnabled = true
-        commandCenter.likeCommand.localizedTitle = "Star"
+        commandCenter.likeCommand.localizedTitle = "Favorite"
         commandCenter.likeCommand.addTarget { [weak self] _ in
-            guard let song = self?.currentSong else { return .commandFailed }
+            guard let self = self, let song = self.currentSong else { return .commandFailed }
+            let willStar = !song.isStarred
+            commandCenter.likeCommand.isActive = willStar
+            self.audioEngine.updateSongStarredState(songId: song.id, isStarred: willStar)
             Task {
-                _ = try? await NavidromeClient.shared.star(id: song.id)
+                if willStar {
+                    _ = try? await NavidromeClient.shared.star(id: song.id)
+                } else {
+                    _ = try? await NavidromeClient.shared.unstar(id: song.id)
+                }
             }
             return .success
         }
 
-        // Dislike / Unstar
-        commandCenter.dislikeCommand.isEnabled = true
-        commandCenter.dislikeCommand.localizedTitle = "Unstar"
-        commandCenter.dislikeCommand.addTarget { [weak self] _ in
-            guard let song = self?.currentSong else { return .commandFailed }
-            Task {
-                _ = try? await NavidromeClient.shared.unstar(id: song.id)
-            }
-            return .success
-        }
+        // Dislike is disabled to keep a clean single Favorite toggle
+        commandCenter.dislikeCommand.isEnabled = false
     }
 
     public func updateNowPlayingInfo() {
@@ -151,6 +134,8 @@ public final class NowPlayingManager: @unchecked Sendable {
             MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
             return
         }
+
+        MPRemoteCommandCenter.shared().likeCommand.isActive = song.isStarred
 
         var nowPlayingInfo: [String: Any] = [
             MPMediaItemPropertyTitle: song.title,
