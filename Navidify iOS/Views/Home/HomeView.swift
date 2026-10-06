@@ -12,7 +12,9 @@ public struct HomeView: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 28) {
                         // Top Greeting & Connection Badge
-                        HStack {
+                        HStack(spacing: 10) {
+                            SpotifyLogoView(size: 26)
+
                             Text(greetingMessage)
                                 .font(.system(size: 24, weight: .bold))
                                 .foregroundColor(Theme.textPrimary)

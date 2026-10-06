@@ -133,6 +133,22 @@ public struct SettingsView: View {
                         }
                         .listRowBackground(Theme.green)
                     }
+
+                    Section(header: Text("ABOUT").foregroundColor(Theme.textSubdued)) {
+                        HStack(spacing: 12) {
+                            SpotifyLogoView(size: 32)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Navidify")
+                                    .font(.system(size: 15, weight: .bold))
+                                    .foregroundColor(Theme.textPrimary)
+                                Text("Spotify Experience for Navidrome")
+                                    .font(.system(size: 12))
+                                    .foregroundColor(Theme.textSecondary)
+                            }
+                        }
+                        .padding(.vertical, 4)
+                        .listRowBackground(Theme.surfaceElevated)
+                    }
                 }
                 .scrollContentBackground(.hidden)
             }
