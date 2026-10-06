@@ -8,6 +8,7 @@ public struct SearchView: View {
     @State private var albums: [Album] = []
     @State private var artists: [Artist] = []
     @State private var isSearching = false
+    @State private var searchTask: Task<Void, Never>?
 
     public var body: some View {
         NavigationStack {
@@ -76,9 +77,13 @@ public struct SearchView: View {
                                             .foregroundColor(Theme.textPrimary)
                                             .padding(.horizontal, 20)
 
-                                        ForEach(Array(songs.prefix(10).enumerated()), id: \.element.id) { index, song in
+                                        ForEach(Array(songs.prefix(10).enumerated()), id: \.offset) { index, song in
                                             SongRowView(song: song, index: index + 1) {
-                                                appState.engine.playQueue(songs: songs, startIndex: index)
+                                                if let targetIdx = songs.firstIndex(where: { $0.id == song.id }) {
+                                                    appState.engine.playQueue(songs: songs, startIndex: targetIdx)
+                                                } else {
+                                                    appState.engine.playQueue(songs: songs, startIndex: index)
+                                                }
                                             }
                                             .padding(.horizontal, 12)
                                         }
@@ -155,17 +160,24 @@ public struct SearchView: View {
     }
 
     private func performSearch(query: String) {
+        searchTask?.cancel()
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
             songs = []
             albums = []
             artists = []
+            isSearching = false
             return
         }
 
         isSearching = true
-        Task {
+        searchTask = Task {
+            // Debounce 250ms to prevent flooding API and racing responses on fast typing
+            try? await Task.sleep(nanoseconds: 250_000_000)
+            guard !Task.isCancelled else { return }
+
             if let result = try? await appState.client.search3(query: trimmed) {
+                guard !Task.isCancelled else { return }
                 await MainActor.run {
                     self.songs = result.songs
                     self.albums = result.albums
@@ -173,6 +185,7 @@ public struct SearchView: View {
                     self.isSearching = false
                 }
             } else {
+                guard !Task.isCancelled else { return }
                 await MainActor.run { self.isSearching = false }
             }
         }

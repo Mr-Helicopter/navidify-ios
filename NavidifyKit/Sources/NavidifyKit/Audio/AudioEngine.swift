@@ -110,6 +110,7 @@ public final class AudioEngine: @unchecked Sendable {
     private var currentAudioFile: AVAudioFile?
     private var currentTempFileUrl: URL?
     private var currentDownloadTask: URLSessionDataTask?
+    private var streamResolutionTask: Task<Void, Never>?
     private var fileHandle: FileHandle?
     private var scheduledFrames: AVAudioFramePosition = 0
     private var totalFramesRead: AVAudioFramePosition = 0
@@ -277,11 +278,25 @@ public final class AudioEngine: @unchecked Sendable {
 
     // MARK: - Playback Control
 
+    private func isCurrentGeneration(_ gen: Int) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return self.playbackGeneration == gen
+    }
+
     public func play(song: Song) {
         lock.lock()
         defer { lock.unlock() }
 
         playbackGeneration += 1
+        let currentGen = playbackGeneration
+
+        streamResolutionTask?.cancel()
+        currentDownloadTask?.cancel()
+        currentDownloadTask = nil
+        cleanupTempFile()
+
+        stopTimeTimer()
         activeBuffersCount = 0
         isStreamComplete = false
         isTransitioningTrack = false
@@ -303,14 +318,22 @@ public final class AudioEngine: @unchecked Sendable {
         onTrackChange?(song)
         onStateChange?(.loading)
 
-        Task {
-            if let streamUrl = await NavidromeClient.shared.getStreamUrl(songId: song.id) {
-                self.startStreaming(url: streamUrl, song: song)
+        self.streamResolutionTask = Task { [weak self] in
+            guard let self = self else { return }
+            let streamUrl = await NavidromeClient.shared.getStreamUrl(songId: song.id)
+            guard !Task.isCancelled else { return }
+
+            guard self.isCurrentGeneration(currentGen) else { return }
+
+            if let streamUrl = streamUrl {
+                self.startStreaming(url: streamUrl, song: song, generation: currentGen)
             } else {
                 await MainActor.run {
-                    self.playbackState = .error("Failed to resolve stream URL")
-                    self.isBuffering = false
-                    self.onStateChange?(self.playbackState)
+                    if self.isCurrentGeneration(currentGen) {
+                        self.playbackState = .error("Failed to resolve stream URL")
+                        self.isBuffering = false
+                        self.onStateChange?(self.playbackState)
+                    }
                 }
             }
         }
@@ -390,6 +413,8 @@ public final class AudioEngine: @unchecked Sendable {
         defer { lock.unlock() }
 
         playbackGeneration += 1
+        streamResolutionTask?.cancel()
+        streamResolutionTask = nil
         activeBuffersCount = 0
         isStreamComplete = false
         isTransitioningTrack = false
@@ -463,7 +488,12 @@ public final class AudioEngine: @unchecked Sendable {
         activeSlot == .slotA ? playerNodeB : playerNodeA
     }
 
-    private func startStreaming(url: URL, song: Song) {
+    private func startStreaming(url: URL, song: Song, generation: Int) {
+        lock.lock()
+        guard self.playbackGeneration == generation else {
+            lock.unlock()
+            return
+        }
         cleanupTempFile()
 
         let tempDir = FileManager.default.temporaryDirectory
@@ -471,6 +501,7 @@ public final class AudioEngine: @unchecked Sendable {
         FileManager.default.createFile(atPath: tempUrl.path, contents: nil)
 
         guard let handle = try? FileHandle(forWritingTo: tempUrl) else {
+            lock.unlock()
             DispatchQueue.main.async {
                 self.playbackState = .error("Failed to create stream spool")
                 self.isBuffering = false
@@ -478,7 +509,6 @@ public final class AudioEngine: @unchecked Sendable {
             return
         }
 
-        lock.lock()
         self.currentTempFileUrl = tempUrl
         self.fileHandle = handle
         self.scheduledFrames = 0
@@ -491,21 +521,32 @@ public final class AudioEngine: @unchecked Sendable {
         request.timeoutInterval = 30.0
 
         let delegate = StreamDataDelegate { [weak self] data in
-            self?.didReceiveStreamChunk(data)
+            self?.didReceiveStreamChunk(data, generation: generation)
         } onComplete: { [weak self] error in
-            self?.didCompleteStream(error: error)
+            self?.didCompleteStream(error: error, generation: generation)
         }
 
         let session = URLSession(configuration: .default, delegate: delegate, delegateQueue: nil)
         let task = session.dataTask(with: request)
+
+        lock.lock()
+        guard self.playbackGeneration == generation else {
+            task.cancel()
+            lock.unlock()
+            return
+        }
         self.currentDownloadTask = task
+        lock.unlock()
+
         task.resume()
     }
 
-    private func didReceiveStreamChunk(_ chunk: Data) {
+    private func didReceiveStreamChunk(_ chunk: Data, generation: Int) {
         lock.lock()
         defer { lock.unlock() }
 
+        // Ignore chunks from superseded track sessions or previous generations
+        guard self.playbackGeneration == generation else { return }
         guard let handle = fileHandle else { return }
         do {
             try handle.write(contentsOf: chunk)
@@ -530,6 +571,11 @@ public final class AudioEngine: @unchecked Sendable {
 
                     DispatchQueue.main.async { [weak self] in
                         guard let self = self else { return }
+                        self.lock.lock()
+                        let matches = (self.playbackGeneration == generation)
+                        self.lock.unlock()
+                        guard matches else { return }
+
                         guard case .loading = self.playbackState else { return }
                         if !self.engine.isRunning {
                             try? self.engine.start()
@@ -658,19 +704,49 @@ public final class AudioEngine: @unchecked Sendable {
         }
     }
 
-    private func didCompleteStream(error: Error?) {
+    private func didCompleteStream(error: Error?, generation: Int) {
         lock.lock()
         defer { lock.unlock() }
 
+        guard self.playbackGeneration == generation else { return }
         guard error == nil, let tempUrl = currentTempFileUrl else { return }
         try? fileHandle?.synchronize()
         self.isStreamComplete = true
 
         if let file = try? AVAudioFile(forReading: tempUrl) {
+            let wasNil = (self.currentAudioFile == nil)
             self.currentAudioFile = file
+            self.audioFormat = file.processingFormat
+            self.sampleRate = file.processingFormat.sampleRate
+
+            if wasNil {
+                self.engine.disconnectNodeOutput(self.activePlayerNode)
+                self.engine.connect(self.activePlayerNode, to: self.preEQMixer, format: file.processingFormat)
+            }
+
             let exactDuration = Double(file.length) / file.processingFormat.sampleRate
             if exactDuration > 0 {
                 self.duration = exactDuration
+            }
+
+            if wasNil {
+                DispatchQueue.main.async { [weak self] in
+                    guard let self = self else { return }
+                    self.lock.lock()
+                    let matches = (self.playbackGeneration == generation)
+                    self.lock.unlock()
+                    guard matches else { return }
+
+                    guard case .loading = self.playbackState else { return }
+                    if !self.engine.isRunning {
+                        try? self.engine.start()
+                    }
+                    self.activePlayerNode.play()
+                    self.playbackState = .playing
+                    self.isBuffering = false
+                    self.startTimeTimer()
+                    self.onStateChange?(.playing)
+                }
             }
         }
 

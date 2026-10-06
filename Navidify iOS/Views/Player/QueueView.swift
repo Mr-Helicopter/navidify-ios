@@ -65,7 +65,11 @@ public struct QueueView: View {
                                     }
                                     .contentShape(Rectangle())
                                     .onTapGesture {
-                                        engine.playQueue(songs: engine.queue, startIndex: index)
+                                        if let targetIdx = engine.queue.firstIndex(where: { $0.id == song.id }) {
+                                            engine.playQueue(songs: engine.queue, startIndex: targetIdx)
+                                        } else {
+                                            engine.playQueue(songs: engine.queue, startIndex: index)
+                                        }
                                     }
                                     .listRowBackground(Theme.surface)
                                 }

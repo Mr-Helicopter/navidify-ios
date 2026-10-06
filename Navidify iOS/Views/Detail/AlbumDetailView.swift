@@ -75,9 +75,13 @@ public struct AlbumDetailView: View {
                         ProgressView().tint(Theme.green).frame(maxWidth: .infinity).padding(.top, 30)
                     } else {
                         LazyVStack(spacing: 2) {
-                            ForEach(Array(songs.enumerated()), id: \.element.id) { index, song in
+                            ForEach(Array(songs.enumerated()), id: \.offset) { index, song in
                                 SongRowView(song: song, index: index + 1) {
-                                    appState.engine.playQueue(songs: songs, startIndex: index)
+                                    if let targetIdx = songs.firstIndex(where: { $0.id == song.id }) {
+                                        appState.engine.playQueue(songs: songs, startIndex: targetIdx)
+                                    } else {
+                                        appState.engine.playQueue(songs: songs, startIndex: index)
+                                    }
                                 }
                             }
                         }

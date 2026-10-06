@@ -84,9 +84,13 @@ public struct PlaylistDetailView: View {
                         ProgressView().tint(Theme.green).frame(maxWidth: .infinity).padding(.top, 40)
                     } else {
                         LazyVStack(spacing: 2) {
-                            ForEach(Array(songs.enumerated()), id: \.element.id) { index, song in
+                            ForEach(Array(songs.enumerated()), id: \.offset) { index, song in
                                 SongRowView(song: song, index: index + 1) {
-                                    appState.engine.playQueue(songs: songs, startIndex: index)
+                                    if let targetIdx = songs.firstIndex(where: { $0.id == song.id }) {
+                                        appState.engine.playQueue(songs: songs, startIndex: targetIdx)
+                                    } else {
+                                        appState.engine.playQueue(songs: songs, startIndex: index)
+                                    }
                                 }
                             }
                         }
@@ -103,6 +107,27 @@ public struct PlaylistDetailView: View {
     }
 
     private func loadSongs() async {
+        // If playlist already has entry items (e.g. Liked Songs passed from LibraryView), use them directly
+        if let existingEntries = playlist.entry, !existingEntries.isEmpty {
+            await MainActor.run {
+                self.songs = existingEntries
+                self.isLoading = false
+            }
+            return
+        }
+
+        if playlist.id == "starred" {
+            if let res = try? await appState.client.getStarred2() {
+                await MainActor.run {
+                    self.songs = res.songs
+                    self.isLoading = false
+                }
+            } else {
+                await MainActor.run { self.isLoading = false }
+            }
+            return
+        }
+
         if let detailed = try? await appState.client.getPlaylist(id: playlist.id),
            let entries = detailed.entry {
             await MainActor.run {
