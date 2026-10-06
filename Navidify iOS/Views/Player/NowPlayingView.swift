@@ -8,6 +8,7 @@ public struct NowPlayingView: View {
 
     @State private var isDraggingScrubber = false
     @State private var scrubTime: Double = 0.0
+    @State private var isHeartBouncing = false
 
     public var body: some View {
         ZStack {
@@ -79,12 +80,27 @@ public struct NowPlayingView: View {
                         Spacer()
 
                         Button(action: {
-                            toggleStar(for: song)
+                            #if canImport(UIKit)
+                            UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                            #endif
+
+                            withAnimation(.spring(response: 0.35, dampingFraction: 0.45, blendDuration: 0)) {
+                                isHeartBouncing = true
+                            }
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                                withAnimation(.easeOut(duration: 0.15)) {
+                                    isHeartBouncing = false
+                                }
+                            }
+
+                            appState.toggleStar(for: song)
                         }) {
                             Image(systemName: song.isStarred ? "heart.fill" : "heart")
                                 .font(.system(size: 22))
                                 .foregroundColor(song.isStarred ? Theme.green : Theme.textSecondary)
+                                .scaleEffect(isHeartBouncing ? 1.35 : 1.0)
                         }
+                        .buttonStyle(.plain)
                     }
                     .padding(.horizontal, 24)
 
@@ -234,22 +250,6 @@ public struct NowPlayingView: View {
         case .off: engine.repeatMode = .all
         case .all: engine.repeatMode = .one
         case .one: engine.repeatMode = .off
-        }
-    }
-
-    private func toggleStar(for song: Song) {
-        Task {
-            if song.isStarred {
-                try? await appState.client.unstar(id: song.id, type: "song")
-            } else {
-                try? await appState.client.star(id: song.id, type: "song")
-            }
-            // Update local starred state
-            await MainActor.run {
-                if let idx = engine.queue.firstIndex(where: { $0.id == song.id }) {
-                    engine.queue[idx].starred = song.isStarred ? nil : "now"
-                }
-            }
         }
     }
 }

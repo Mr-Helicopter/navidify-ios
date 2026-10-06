@@ -124,4 +124,44 @@ public final class AppState {
             self.currentLyrics = lines
         }
     }
+
+    public func toggleStar(for song: Song) {
+        let willStar = !song.isStarred
+
+        // 1. Optimistically update AudioEngine state
+        engine.updateSongStarredState(songId: song.id, isStarred: willStar)
+
+        // 2. Optimistically update starredSongs in AppState
+        if willStar {
+            if !starredSongs.contains(where: { $0.id == song.id }) {
+                var updated = song
+                updated.starred = "now"
+                starredSongs.insert(updated, at: 0)
+            }
+        } else {
+            starredSongs.removeAll(where: { $0.id == song.id })
+        }
+
+        // 3. Asynchronously persist to Navidrome server
+        Task {
+            do {
+                if willStar {
+                    try await client.star(id: song.id, type: "song")
+                } else {
+                    try await client.unstar(id: song.id, type: "song")
+                }
+            } catch {
+                print("[AppState] Error toggling star for song \(song.id): \(error)")
+                // Revert state on network failure
+                await MainActor.run {
+                    self.engine.updateSongStarredState(songId: song.id, isStarred: !willStar)
+                    if willStar {
+                        self.starredSongs.removeAll(where: { $0.id == song.id })
+                    } else {
+                        self.starredSongs.insert(song, at: 0)
+                    }
+                }
+            }
+        }
+    }
 }

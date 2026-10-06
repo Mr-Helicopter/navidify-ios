@@ -350,6 +350,18 @@ public final class AudioEngine: @unchecked Sendable {
         play(song: songs[startIndex])
     }
 
+    public func updateSongStarredState(songId: String, isStarred: Bool) {
+        lock.lock()
+        defer { lock.unlock() }
+
+        if currentSong?.id == songId {
+            currentSong?.starred = isStarred ? "now" : nil
+        }
+        if let idx = queue.firstIndex(where: { $0.id == songId }) {
+            queue[idx].starred = isStarred ? "now" : nil
+        }
+    }
+
     public func resume() {
         guard currentSong != nil else { return }
         if !engine.isRunning {
