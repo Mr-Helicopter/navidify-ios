@@ -48,6 +48,7 @@ public struct MiniPlayerView: View {
                             .foregroundColor(Theme.textPrimary)
                             .frame(width: 36, height: 36)
                     }
+                    .buttonStyle(.plain)
 
                     // Next track button
                     Button(action: {
@@ -58,18 +59,20 @@ public struct MiniPlayerView: View {
                             .foregroundColor(Theme.textPrimary)
                             .frame(width: 36, height: 36)
                     }
+                    .buttonStyle(.plain)
                 }
                 .padding(.horizontal, 12)
                 .frame(height: 56)
                 .background(Theme.surfaceElevated)
             }
             .clipShape(RoundedRectangle(cornerRadius: 8))
-            .padding(.horizontal, 8)
-            .padding(.bottom, 50) // float right above bottom tab bar
-            .contentShape(Rectangle())
+            .contentShape(RoundedRectangle(cornerRadius: 8))
             .onTapGesture {
                 appState.isNowPlayingExpanded = true
             }
+            .shadow(color: Color.black.opacity(0.35), radius: 8, x: 0, y: 4)
+            .padding(.horizontal, 8)
+            .padding(.bottom, 56) // float cleanly above bottom tab bar without intercepting tab touches
         }
     }
 }
