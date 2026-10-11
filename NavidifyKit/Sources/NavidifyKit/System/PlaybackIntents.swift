@@ -2,7 +2,7 @@
 import AppIntents
 import Foundation
 
-public struct TogglePlayPauseIntent: AudioPlaybackIntent {
+public struct TogglePlayPauseIntent: AudioPlaybackIntent, LiveActivityIntent {
     public static var title: LocalizedStringResource = "Toggle Play / Pause"
     public static var description = IntentDescription("Toggles playback between play and pause")
 
@@ -14,7 +14,7 @@ public struct TogglePlayPauseIntent: AudioPlaybackIntent {
     }
 }
 
-public struct NextTrackIntent: AudioPlaybackIntent {
+public struct NextTrackIntent: AudioPlaybackIntent, LiveActivityIntent {
     public static var title: LocalizedStringResource = "Next Track"
     public static var description = IntentDescription("Skips to the next track")
 
@@ -26,7 +26,7 @@ public struct NextTrackIntent: AudioPlaybackIntent {
     }
 }
 
-public struct PreviousTrackIntent: AudioPlaybackIntent {
+public struct PreviousTrackIntent: AudioPlaybackIntent, LiveActivityIntent {
     public static var title: LocalizedStringResource = "Previous Track"
     public static var description = IntentDescription("Plays the previous track")
 

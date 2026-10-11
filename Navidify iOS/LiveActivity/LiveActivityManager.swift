@@ -8,9 +8,8 @@ import NavidifyKit
 public final class LiveActivityManager {
     public static let shared = LiveActivityManager()
 
-    /// When false, ActivityKit Live Activities are disabled to prevent duplicate Lock Screen banners,
-    /// relying entirely on iOS native MPNowPlayingInfoCenter for Lock Screen and Dynamic Island.
-    public static var isEnabled: Bool = false
+    /// When true, ActivityKit Live Activities are active for Lock Screen and Dynamic Island.
+    public static var isEnabled: Bool = true
 
     private var currentActivity: Activity<NavidifyActivityAttributes>?
     private var lastProgressUpdateTime: Date = .distantPast
@@ -93,11 +92,12 @@ public final class LiveActivityManager {
         let existingArtwork = SharedArtworkStore.shared.existingArtworkPath(for: song.id)
         self.currentArtworkPath = existingArtwork
 
+        let isCurrentlyPlaying = AudioEngine.shared.playbackState == .playing || AudioEngine.shared.playbackState == .loading
         let contentState = NavidifyActivityAttributes.ContentState(
             title: song.title,
             artist: song.effectiveArtist,
             album: song.effectiveAlbum,
-            isPlaying: AudioEngine.shared.playbackState == .playing,
+            isPlaying: isCurrentlyPlaying,
             currentTime: AudioEngine.shared.currentTime,
             duration: song.duration,
             artworkPath: existingArtwork
@@ -177,7 +177,7 @@ public final class LiveActivityManager {
             title: song.title,
             artist: song.effectiveArtist,
             album: song.effectiveAlbum,
-            isPlaying: isPlaying ?? (AudioEngine.shared.playbackState == .playing),
+            isPlaying: isPlaying ?? (AudioEngine.shared.playbackState == .playing || AudioEngine.shared.playbackState == .loading),
             currentTime: currentTime ?? AudioEngine.shared.currentTime,
             duration: duration ?? song.duration,
             artworkPath: artworkPath ?? self.currentArtworkPath

@@ -25,6 +25,42 @@ final class NavidifyKitTests: XCTestCase {
         XCTAssertNil(KeychainHelper.load(key: .username))
     }
 
+    func testPlaybackIntentsSongSkipping() async throws {
+        let song1 = Song(id: "test-1", title: "Track One", album: "Test Album", artist: "Test Artist", duration: 200)
+        let song2 = Song(id: "test-2", title: "Track Two", album: "Test Album", artist: "Test Artist", duration: 240)
+        let song3 = Song(id: "test-3", title: "Track Three", album: "Test Album", artist: "Test Artist", duration: 190)
+
+        let engine = AudioEngine.shared
+        engine.queue = [song1, song2, song3]
+        engine.queueIndex = 0
+        engine.play(song: song1)
+
+        XCTAssertEqual(engine.currentSong?.id, "test-1")
+        XCTAssertEqual(engine.queueIndex, 0)
+
+        // Perform NextTrackIntent (skips from track 1 to track 2)
+        let nextIntent = NextTrackIntent()
+        _ = try await nextIntent.perform()
+
+        XCTAssertEqual(engine.currentSong?.id, "test-2")
+        XCTAssertEqual(engine.queueIndex, 1)
+
+        // Perform NextTrackIntent again (skips from track 2 to track 3)
+        _ = try await nextIntent.perform()
+
+        XCTAssertEqual(engine.currentSong?.id, "test-3")
+        XCTAssertEqual(engine.queueIndex, 2)
+
+        // Perform PreviousTrackIntent (skips back from track 3 to track 2)
+        let prevIntent = PreviousTrackIntent()
+        _ = try await prevIntent.perform()
+
+        XCTAssertEqual(engine.currentSong?.id, "test-2")
+        XCTAssertEqual(engine.queueIndex, 1)
+
+        engine.stop()
+    }
+
     func testLivePing() async {
         guard let url = ProcessInfo.processInfo.environment["NAVIDROME_BASE_URL"],
               let user = ProcessInfo.processInfo.environment["NAVIDROME_USERNAME"],
@@ -161,7 +197,7 @@ final class NavidifyKitTests: XCTestCase {
 
         for second in 1...5 {
             try await Task.sleep(nanoseconds: 1_000_000_000)
-            print("T+\(second)s: currentSong='\(engine.currentSong?.title ?? "nil")' state=\(engine.playbackState) currentTime=\(engine.currentTime) queueIndex=\(engine.queueIndex)")
+            print("T+\(second)s: currentSong='\(engine.currentSong?.title ?? "nil")' state=\(engine.playbackState) currentTime=\(engine.currentTime) queueIndex=\\(engine.queueIndex)")
         }
 
         XCTAssertEqual(engine.currentSong?.id, targetSong.id, "Expected song \(targetSong.title) to be playing, but \(engine.currentSong?.title ?? "nil") was playing!")
@@ -177,7 +213,6 @@ final class NavidifyKitTests: XCTestCase {
         }
 
         XCTAssertEqual(engine.currentSong?.id, secondTarget.id, "Expected \(secondTarget.title) after switch, got \(engine.currentSong?.title ?? "nil")")
-
         engine.stop()
     }
 }
